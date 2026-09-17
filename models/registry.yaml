@@ -1,0 +1,45 @@
+# models/registry.yaml — 模型工件注册表（空模板）
+#
+# 训练侧（training/）每导出一个模型工件，在此追加一条记录；
+# runtime 按本注册表解析并加载模型。大体积权重不入库，仅存 URI 与校验和。
+#
+# 字段说明：
+#   name            模型唯一名称（kebab-case，如 batana-pose）
+#   version         工件版本（语义化版本）
+#   task            任务类型：pose2d / pose3d / phase_split / scoring / ...
+#   format          工件格式：onnx / tflite / coreml / rknn
+#   backends        可运行该工件的后端列表（对应 runtime/backends/）
+#   uri             工件获取地址（http(s):// 或 s3:// 等；不入库的原因见 models/README.md）
+#   sha256          工件文件 SHA256 校验和（加载前必须校验）
+#   size_bytes      工件大小（字节）
+#   input_shape     输入张量形状（NCHW 或 NHWC，按 format 约定注明）
+#   output          输出说明（自由文本，关键点数/维度等）
+#   capabilities    该工件支撑的能力 id（对应 docs/contracts/capabilities.md）
+#   pipelines       引用该工件的管线档位（standard-vision / ... / max）
+#   trained_on      训练数据集版本标识
+#   metrics         评估指标（键值对，如 map / pck / mae）
+#   created_at      导出时间（ISO 8601）
+#   notes           备注（可选）
+
+registry_version: "1"   # 注册表结构版本
+
+models: []
+# 示例（登记时取消注释并按实填写）：
+# models:
+#   - name: batana-pose
+#     version: "0.1.0"
+#     task: pose2d
+#     format: tflite
+#     backends: [tflite, coreml]
+#     uri: "s3://batana-models/batana-pose/0.1.0/model.tflite"
+#     sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+#     size_bytes: 0
+#     input_shape: [1, 256, 256, 3]   # NHWC
+#     output: "33 个关键点 (x, y, visibility)"
+#     capabilities: [pose2d]
+#     pipelines: [standard-vision, pro-fusion, pro-stereo, max]
+#     trained_on: "batana-swing-dataset v0.1"
+#     metrics:
+#       pck: 0.0
+#     created_at: "2026-09-17T00:00:00+08:00"
+#     notes: ""
