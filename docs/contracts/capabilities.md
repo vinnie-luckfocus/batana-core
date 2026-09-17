@@ -1,10 +1,10 @@
 # capabilities — 能力注册表
 
-> 版本：v1-draft（2026-09-17）· 定义方：batana-core · 消费方：batana（gui）/ batana-web
+> 版本：1.0-draft（2026-09-17）· 定义方：batana-core · 消费方：batana-gui / batana-web
 
 能力注册表描述"每条管线档位能产出哪些能力"。运行时探测当前已连接的外设，自动选择可用的最高档位；外设热插拔时无缝升降级。GUI 与 Web 查询本注册表动态显示/隐藏功能，UI 只呈现"当前可用能力"。
 
-档位矩阵与产品侧定义以主仓 `docs/model-tiers.md` 为准，本文件为其机器可读的对齐版本。
+**产品语义以司令塔（batana 主仓）`docs/model-tiers.md` 为准，本文件仅对齐档位×能力矩阵**，为其机器可读版本。
 
 ## 档位定义
 
