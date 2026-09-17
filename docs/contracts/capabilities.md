@@ -1,6 +1,6 @@
 # capabilities — 能力注册表
 
-> 版本：1.0-draft（2026-09-17）· 定义方：batana-core · 消费方：batana-gui / batana-web
+> 版本：1.0（2026-09-17 定稿）· 状态：稳定版 · 定义方：batana-core · 消费方：batana-gui / batana-web
 
 能力注册表描述"每条管线档位能产出哪些能力"。运行时探测当前已连接的外设，自动选择可用的最高档位；外设热插拔时无缝升降级。GUI 与 Web 查询本注册表动态显示/隐藏功能，UI 只呈现"当前可用能力"。
 
@@ -11,7 +11,7 @@
 | 档位 id | 输入模态 | 典型设备组合 | 延迟目标 |
 |---|---|---|---|
 | `standard-vision` | `mono` | 仅手机 | 单次分析 ≤ 15s（逐步优化到 ≤ 10s） |
-| `standard-imu` | `imu` | 仅 batana-cap | 棒速/计数近实时 ≤ 1s |
+| `standard-imu` | `imu` | batana-cap + 手机上位机（正式评分在 runtime） | 棒速/计数近实时 ≤ 1s |
 | `pro-fusion` | `mono` + `imu` | 手机 + batana-cap | 融合分析 ≤ 8s |
 | `pro-stereo` | `stereo` | 仅 batana-pi | 3D 分析 ≤ 8s（边缘端） |
 | `max` | `stereo` + `imu` | batana-pi + batana-cap | 全量分析 ≤ 8s（边缘端） |
@@ -57,3 +57,9 @@
 
 - v2：视频-IMU 联合标定自动化，`pro-fusion` 的 `bat_traj3d` 从 coarse 升级为 full。
 - v3：`coach_advice` 由规则引擎切换为生成式模型（云端 batana-core Python 侧）。
+
+## 变更记录
+
+- **1.0-draft（2026-09-17，首版）**：首版能力注册表，对齐司令塔（batana 主仓）`docs/model-tiers.md` 的档位×能力矩阵，建立支持度标记（`full` / `partial` / `coarse` / `rule` / `rule_data` / `model` / `—`）到矩阵单元格的映射。
+- **1.0（2026-09-17）：定稿冻结，此后主版本内向后兼容**；终检整改：`standard-imu` 典型设备组合改为「batana-cap + 手机上位机（正式评分在 runtime）」，与司令塔 `docs/model-tiers.md` 对齐。
+- 注意：**契约版本变更需同步更新司令塔（batana 主仓）`repos.yaml`** 中的版本兼容矩阵。

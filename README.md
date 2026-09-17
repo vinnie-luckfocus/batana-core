@@ -38,8 +38,8 @@ batana-core/
 
 ## 对外契约
 
-- [`docs/contracts/session-schema.md`](docs/contracts/session-schema.md)：一次挥棒会话的完整结构化定义（v1-draft）
-- [`docs/contracts/capabilities.md`](docs/contracts/capabilities.md)：能力注册表（v1-draft），按档位声明能力支持情况
+- [`docs/contracts/session-schema.md`](docs/contracts/session-schema.md)：一次挥棒会话的完整结构化定义（v1.0，稳定版）
+- [`docs/contracts/capabilities.md`](docs/contracts/capabilities.md)：能力注册表（v1.0，稳定版），按档位声明能力支持情况
 - FFI API：`batana_runtime_create(config) → session_analyze(input) → SessionResult`
 
 ## 路线图

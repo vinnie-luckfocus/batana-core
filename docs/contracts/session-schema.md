@@ -1,6 +1,6 @@
 # session-schema — 挥棒会话数据契约
 
-> 版本：1.0-draft（2026-09-17）· 定义方：batana-core · 消费方：batana-gui / batana-pi / batana-web
+> 版本：1.0（2026-09-17 定稿）· 状态：稳定版 · 定义方：batana-core · 消费方：batana-gui / batana-pi / batana-web
 
 一次挥棒会话（session）是 batana 生态内传递分析结果的最小完整单元。本文件定义其结构化字段，所有仓库间的会话数据交换必须遵循本 schema。
 
@@ -38,9 +38,12 @@ video:                           # 视频引用（可选；standard-imu 档位�
   resolution: [1280, 720]          # [宽, 高]，像素
   duration_ms: 1850
   view: "side"                     # 拍摄视角：side / front / behind / other
+  sha256: "9f2c4a1b7e8d3f5a0c6b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2"  # 可选；hex 小写字符串，带外上传场景填写，用于云端完整性校验
 
 pose2d:                          # 2D 姿态序列（可选；能力 id: pose2d）
   model: "batana-pose-v0.1"        # 使用的姿态模型（对应 models/registry.yaml）
+                                   # 取值规则：与 sync-api /models/manifest 的映射为 `{id}-v{major}.{minor}`
+                                   # （如 manifest id=batana-pose、version=0.1.0 → batana-pose-v0.1）
   frame_rate: 240                  # 与视频帧率一致
   frames:
     - frame_index: 0
@@ -60,7 +63,8 @@ imu:                             # IMU 序列（可选；standard-imu / pro-fusi
   sample_rate_hz: 200
   clock_anchor:                    # 时钟锚点（可选；pro-fusion / max 必填）：
                                    # cap 单调时钟与主机时钟的映射基准，用于视觉-惯性时间融合
-    device_ts_us: 1234567890       # 锚点时刻的 cap 设备单调时钟（微秒）
+    device_ts_us: 1234567890       # 锚点时刻的 cap 设备时钟：拼接回绕后的 64 位单调时钟（微秒），
+                                   # 见 ble-protocol 4.2（32 位 µs 时间戳回绕拼接规则）
     host_time_utc: "2026-09-17T02:30:00.000Z"  # 锚点时刻的主机 UTC 时间
     offset_ms: 0                   # 设备时钟换算到会话时间轴的偏移（毫秒）
     drift_ppm: 12.5                # 设备时钟相对主机时钟的漂移率（ppm，用于长时间外推校正）
@@ -102,7 +106,7 @@ phases:                          # 阶段分割（可选；能力 id: phase_spli
       start_ms: 1180
       end_ms: 1850
 
-metrics:                         # 评分指标（可选；能力 id: score_basic / bat_speed / ...）
+metrics:                         # 评分指标（上传云端时必填；本地仅采集未分析时可缺失；能力 id: score_basic / bat_speed / ...）
   capabilities: ["pose2d", "phase_split", "score_basic", "bat_speed"]  # 本次实际产出的能力
   bat_speed_mps: 28.4              # 棒速估计（能力 bat_speed；精度随档位见 capabilities.md）
   swing_count: 1                   # 挥棒计数（能力 swing_count）
@@ -142,7 +146,7 @@ extensions:                        # 预留扩展位；实验字段先进此处�
 
 - `pose2d` 坐标为归一化值，消费方按 `video.resolution` 还原像素坐标。
 - `phases` 的时间轴与 `video` / `imu` 共用同一时间原点（会话起点）；`pro-fusion` / `max` 档位的时间戳已由 `tempo_sync` 能力对齐。
-- **时钟域换算**：`imu` 样本的设备时钟（`device_ts_us`，cap 单调时钟，微秒）经 `imu.clock_anchor` 换算到会话时间轴（毫秒）：
+- **时钟域换算**：`imu` 样本的设备时钟（`device_ts_us`，cap 拼接回绕后的 64 位单调时钟，微秒，见 ble-protocol 4.2）经 `imu.clock_anchor` 换算到会话时间轴（毫秒），`clock_anchor.device_ts_us` 与样本 `device_ts_us` 使用同一 64 位时钟域：
 
   ```
   session_ts_ms = (device_ts_us - clock_anchor.device_ts_us) / 1000 + clock_anchor.offset_ms
@@ -152,9 +156,10 @@ extensions:                        # 预留扩展位；实验字段先进此处�
 - **IMU 单位换算**：BLE 链路上传输的是原始值（加速度 `mg` 量纲 i16；陀螺仪原始 LSB，灵敏度见 ble-protocol 量程配置），接收侧（gui / pi / core runtime）负责换算为 SI 单位（`m/s²`、`rad/s`）后写入本 schema 的 `imu.samples`。换算规则与量程定义见 batana-cap 仓库 `docs/contracts/ble-protocol.md`。
 - 所有 ISO 8601 时间戳（`meta.created_at`、`imu.clock_anchor.host_time_utc` 等）一律使用 UTC（`Z` 后缀）；本地时区仅允许在展示层换算，不进入数据契约。
 - `metrics.details` / `extensions` 内的字段随档位与能力演进扩充，消费方必须忽略未知字段。
-- 本 draft 稳定后将固化为 v1.0 并移交版本管理（见主仓 `docs/versioning.md`）。
+- 本契约已定稿为 v1.0（稳定版）并移交版本管理（见主仓 `docs/versioning.md`）。
 
 ## 变更记录
 
 - **1.0-draft（2026-09-17，评审整改）**：新增 `imu.clock_anchor` 时钟锚点与时钟域换算公式；新增可选 `calibration`（双目标定，含 `format_version`）；`meta.duration_ms` 改为必填（覆盖纯 IMU 会话）；补充 IMU 单位换算备注（BLE 原始值 → SI，交叉引用 ble-protocol）；`imu.device_id` 更名为 `imu.cap_id`（对齐 BATANA-CAP-xx 广播名规则）；`session_id` 示例统一为 ULID 风格；时间戳统一注明 UTC；`metrics.details` 注释字段正式化为 `extensions.metrics_experimental` 可选定义，髋肩分离角归入 `kinematic_seq`；版本标注统一为 `1.0-draft`；消费方统一写作 batana-gui。
+- **1.0（2026-09-17）：定稿冻结，此后主版本内向后兼容**；终检整改：`metrics` 必填性裁决为「上传云端时必填；本地仅采集未分析时可缺失」（对齐 sync-api）；`video` 新增可选字段 `sha256`（带外上传完整性校验）；`imu.clock_anchor.device_ts_us` 注释明确为拼接回绕后的 64 位单调时钟并交叉引用 ble-protocol 4.2；`pose2d.model` 注明与 sync-api `/models/manifest` 的取值映射规则 `{id}-v{major}.{minor}`。
 - 注意：**契约版本变更需同步更新司令塔（batana 主仓）`repos.yaml`** 中的版本兼容矩阵。
