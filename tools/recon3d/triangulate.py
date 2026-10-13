@@ -9,12 +9,22 @@
 
 批量模式（--batch）输入 JSON：
 - {"frames": [{"frame_index": int, "timestamp_ms": float,
-   "left": [[x, y], ...], "right": [[x, y], ...]}, ...]}
-  每帧左右目点数须一致（允许任意点数，按数组顺序一一对应）。
+   "left": [[x, y], ...], "right": [[x, y], ...],
+   "left_visibility": [v, ...], "right_visibility": [v, ...]}, ...]}
+  每帧左右目点数须一致（允许任意点数，按数组顺序一一对应）；
+  visibility 数组可选（与坐标等长，[0,1]），缺省视为全部 1.0（向后兼容）。
+
+批量模式前处理参数：
+- --min-vis FLOAT（默认 0.5）：任一目 visibility 低于阈值的点不三角化，输出 null；
+- --smooth N（奇数窗口，默认 1=不平滑）：三角化前对每个关节的每目 2D 轨迹做
+  时序中值滤波（只基于未掩蔽帧，被掩蔽帧保持掩蔽）；
+- --epipolar-correct：用标定推导基础矩阵 F，对每对对应点做 cv2.correctMatches
+  最优极线校正后再三角化。
 
 用法：
     python -m tools.recon3d.triangulate --calib calibration.json --points pairs.json --out points3d.json
-    python -m tools.recon3d.triangulate --calib calibration.json --batch frames.json --out frames3d.json
+    python -m tools.recon3d.triangulate --calib calibration.json --batch frames.json --out frames3d.json \
+        --min-vis 0.5 --smooth 5 --epipolar-correct
 """
 
 from __future__ import annotations
@@ -26,6 +36,12 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+from tools.recon3d.preprocess import (
+    correct_correspondences,
+    fundamental_matrix,
+    median_smooth,
+)
 
 
 def load_calibration(path: str | Path) -> dict:
@@ -61,26 +77,80 @@ def triangulate_points(calib: dict, pts_left: np.ndarray, pts_right: np.ndarray)
     return pts3d
 
 
-def triangulate_frames(calib: dict, frames: list[dict]) -> list[dict]:
+def triangulate_frames(
+    calib: dict,
+    frames: list[dict],
+    min_vis: float = 0.5,
+    smooth: int = 1,
+    epipolar_correct: bool = False,
+) -> list[dict]:
     """批量三角化：逐帧调 triangulate_points，返回带帧元信息的结果列表。
 
-    frames 每项含 frame_index / timestamp_ms / left / right（左右目点数须一致）。
-    返回 [{"frame_index", "timestamp_ms", "points_3d": [[x, y, z], ...]}]（mm）。
+    frames 每项含 frame_index / timestamp_ms / left / right（左右目点数须一致），
+    可选 left_visibility / right_visibility（与坐标等长；缺省视为全部 1.0）。
+    任一目 visibility < min_vis 的点不三角化，输出 points_3d 对应位置为 None（JSON null）。
+    smooth > 1 时对每关节每目 2D 轨迹做时序中值滤波（要求各帧点数一致）；
+    epipolar_correct=True 时对有效对应点做 cv2.correctMatches 极线校正。
+    返回 [{"frame_index", "timestamp_ms", "points_3d": [[x, y, z] | None, ...]}]（mm）。
     """
-    results: list[dict] = []
+    if smooth > 1 and smooth % 2 == 0:
+        raise ValueError(f"平滑窗口须为奇数: {smooth}")
+
+    T = len(frames)
+    lefts: list[np.ndarray] = []
+    rights: list[np.ndarray] = []
+    vis_l: list[np.ndarray] = []
+    vis_r: list[np.ndarray] = []
     for i, f in enumerate(frames):
         pl = np.asarray(f["left"], dtype=np.float64).reshape(-1, 2)
         pr = np.asarray(f["right"], dtype=np.float64).reshape(-1, 2)
+        fi = f.get("frame_index", i)
         if pl.shape != pr.shape:
             raise ValueError(
-                f"帧 {f.get('frame_index', i)} 左右目点数不一致: "
-                f"{len(pl)} vs {len(pr)}"
+                f"帧 {fi} 左右目点数不一致: {len(pl)} vs {len(pr)}"
             )
-        pts3d = triangulate_points(calib, pl, pr)
+        n = len(pl)
+        vl = np.asarray(f.get("left_visibility", [1.0] * n), dtype=np.float64).ravel()
+        vr = np.asarray(f.get("right_visibility", [1.0] * n), dtype=np.float64).ravel()
+        if len(vl) != n or len(vr) != n:
+            raise ValueError(
+                f"帧 {fi} visibility 与坐标数量不一致: {len(vl)}/{len(vr)} vs {n}"
+            )
+        lefts.append(pl)
+        rights.append(pr)
+        vis_l.append(vl)
+        vis_r.append(vr)
+
+    uniform = len({len(p) for p in lefts}) <= 1
+    if smooth > 1 and not uniform:
+        raise ValueError("时序平滑要求各帧点数一致（关节轨迹需对齐）")
+
+    # 平滑：只基于任一目均达 min_vis 的有效帧；掩蔽帧的值平滑后仍被掩蔽（最终掩码不变）
+    if smooth > 1 and T > 0:
+        valid = (np.stack(vis_l) >= min_vis) & (np.stack(vis_r) >= min_vis)
+        ls = median_smooth(np.stack(lefts), valid, smooth)
+        rs = median_smooth(np.stack(rights), valid, smooth)
+        lefts, rights = list(ls), list(rs)
+
+    F = fundamental_matrix(calib) if epipolar_correct else None
+
+    results: list[dict] = []
+    for i, f in enumerate(frames):
+        pl, pr = lefts[i], rights[i]
+        valid = (vis_l[i] >= min_vis) & (vis_r[i] >= min_vis)
+        pts3d: list = [None] * len(pl)
+        idx = np.flatnonzero(valid)
+        if idx.size:
+            sel_l, sel_r = pl[idx], pr[idx]
+            if F is not None:
+                sel_l, sel_r = correct_correspondences(F, sel_l, sel_r)
+            tri = triangulate_points(calib, sel_l, sel_r)
+            for k, j in enumerate(idx):
+                pts3d[j] = tri[k].tolist()
         results.append({
             "frame_index": int(f.get("frame_index", i)),
             "timestamp_ms": float(f.get("timestamp_ms", 0.0)),
-            "points_3d": pts3d.tolist(),
+            "points_3d": pts3d,
         })
     return results
 
@@ -94,6 +164,11 @@ def load_batch_frames(path: str | Path) -> list[dict]:
     for i, f in enumerate(frames):
         if not isinstance(f, dict) or "left" not in f or "right" not in f:
             raise ValueError(f"frames[{i}] 需含 left/right 点数组")
+        for key in ("left_visibility", "right_visibility"):
+            if key in f and len(f[key]) != len(f["left"]):
+                raise ValueError(
+                    f"frames[{i}].{key} 长度须与坐标一致: {len(f[key])} vs {len(f['left'])}"
+                )
     return frames
 
 
@@ -127,12 +202,22 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--points", help="单组对应点文件（JSON 或 CSV）")
     src.add_argument("--batch", help="批量对应点 JSON（frames 数组，逐帧三角化）")
     parser.add_argument("--out", default=None, help="输出 JSON 路径（缺省打印到 stdout）")
+    parser.add_argument("--min-vis", type=float, default=0.5,
+                        help="批量模式：任一目 visibility 低于该值的点输出 null（默认 0.5）")
+    parser.add_argument("--smooth", type=int, default=1,
+                        help="批量模式：关节 2D 轨迹时序中值滤波窗口（奇数，默认 1=不平滑）")
+    parser.add_argument("--epipolar-correct", action="store_true",
+                        help="批量模式：三角化前对对应点做 cv2.correctMatches 极线校正")
     args = parser.parse_args(argv)
 
     calib = load_calibration(args.calib)
     if args.batch:
         frames = load_batch_frames(args.batch)
-        results = triangulate_frames(calib, frames)
+        results = triangulate_frames(
+            calib, frames,
+            min_vis=args.min_vis, smooth=args.smooth,
+            epipolar_correct=args.epipolar_correct,
+        )
         result = {
             "frame": "left_camera",
             "unit": "mm",
