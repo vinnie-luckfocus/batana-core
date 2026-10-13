@@ -7,8 +7,14 @@
 - JSON: {"points": [[xl, yl, xr, yr], ...]} 或 {"left": [[x, y], ...], "right": [[x, y], ...]}
 - CSV: 每行 xl,yl,xr,yr（首行允许表头）
 
+批量模式（--batch）输入 JSON：
+- {"frames": [{"frame_index": int, "timestamp_ms": float,
+   "left": [[x, y], ...], "right": [[x, y], ...]}, ...]}
+  每帧左右目点数须一致（允许任意点数，按数组顺序一一对应）。
+
 用法：
     python -m tools.recon3d.triangulate --calib calibration.json --points pairs.json --out points3d.json
+    python -m tools.recon3d.triangulate --calib calibration.json --batch frames.json --out frames3d.json
 """
 
 from __future__ import annotations
@@ -55,6 +61,42 @@ def triangulate_points(calib: dict, pts_left: np.ndarray, pts_right: np.ndarray)
     return pts3d
 
 
+def triangulate_frames(calib: dict, frames: list[dict]) -> list[dict]:
+    """批量三角化：逐帧调 triangulate_points，返回带帧元信息的结果列表。
+
+    frames 每项含 frame_index / timestamp_ms / left / right（左右目点数须一致）。
+    返回 [{"frame_index", "timestamp_ms", "points_3d": [[x, y, z], ...]}]（mm）。
+    """
+    results: list[dict] = []
+    for i, f in enumerate(frames):
+        pl = np.asarray(f["left"], dtype=np.float64).reshape(-1, 2)
+        pr = np.asarray(f["right"], dtype=np.float64).reshape(-1, 2)
+        if pl.shape != pr.shape:
+            raise ValueError(
+                f"帧 {f.get('frame_index', i)} 左右目点数不一致: "
+                f"{len(pl)} vs {len(pr)}"
+            )
+        pts3d = triangulate_points(calib, pl, pr)
+        results.append({
+            "frame_index": int(f.get("frame_index", i)),
+            "timestamp_ms": float(f.get("timestamp_ms", 0.0)),
+            "points_3d": pts3d.tolist(),
+        })
+    return results
+
+
+def load_batch_frames(path: str | Path) -> list[dict]:
+    """加载批量模式输入 JSON，校验基本结构后返回帧列表。"""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    frames = data.get("frames")
+    if not isinstance(frames, list) or not frames:
+        raise ValueError(f"批量输入需含非空 frames 数组: {path}")
+    for i, f in enumerate(frames):
+        if not isinstance(f, dict) or "left" not in f or "right" not in f:
+            raise ValueError(f"frames[{i}] 需含 left/right 点数组")
+    return frames
+
+
 def load_point_pairs(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     p = Path(path)
     if p.suffix.lower() == ".json":
@@ -81,11 +123,29 @@ def load_point_pairs(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="双目三角化：2D 对应点 → 3D 点（左目坐标系，mm）")
     parser.add_argument("--calib", required=True, help="calibrate_stereo 输出的标定 JSON")
-    parser.add_argument("--points", required=True, help="对应点文件（JSON 或 CSV）")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--points", help="单组对应点文件（JSON 或 CSV）")
+    src.add_argument("--batch", help="批量对应点 JSON（frames 数组，逐帧三角化）")
     parser.add_argument("--out", default=None, help="输出 JSON 路径（缺省打印到 stdout）")
     args = parser.parse_args(argv)
 
     calib = load_calibration(args.calib)
+    if args.batch:
+        frames = load_batch_frames(args.batch)
+        results = triangulate_frames(calib, frames)
+        result = {
+            "frame": "left_camera",
+            "unit": "mm",
+            "frames": results,
+        }
+        text = json.dumps(result, indent=2, ensure_ascii=False)
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"三角化 {len(results)} 帧 -> {args.out}")
+        else:
+            print(text)
+        return 0
+
     pl, pr = load_point_pairs(args.points)
     pts3d = triangulate_points(calib, pl, pr)
     result = {
